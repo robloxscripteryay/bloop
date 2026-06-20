@@ -16,6 +16,36 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
 
   const [profile, setProfile] = useState<Profile>(initialProfile)
 
+  // ---------- Fix: iPad/iOS keyboard pushes the whole page up ----------
+  // Root cause: Safari doesn't shrink the CSS layout viewport when the
+  // on-screen keyboard opens — only the *visual* viewport shrinks. Since our
+  // layout is sized with vh/dvh (the layout viewport), the browser scrolls
+  // the page to keep the focused input visible above the keyboard, which
+  // drags the whole app shell upward instead of just resizing the chat.
+  // Fix: track the real visible height via window.visualViewport (which DOES
+  // account for the keyboard) and pin the app shell to that exact pixel
+  // height via a CSS variable, instead of trusting vh/dvh during keyboard use.
+  useEffect(() => {
+    const vv = typeof window !== 'undefined' ? window.visualViewport : null
+    if (!vv) return // older browsers: CSS dvh fallback in globals.css still applies
+
+    function setAppHeight() {
+      document.documentElement.style.setProperty('--app-height', `${vv!.height}px`)
+      // Keep the page itself pinned to the top-left of the visual viewport;
+      // without this, iOS can leave the layout scrolled after the keyboard
+      // opens, which is the "page goes upward" symptom.
+      window.scrollTo(0, 0)
+    }
+
+    setAppHeight()
+    vv.addEventListener('resize', setAppHeight)
+    vv.addEventListener('scroll', setAppHeight)
+    return () => {
+      vv.removeEventListener('resize', setAppHeight)
+      vv.removeEventListener('scroll', setAppHeight)
+    }
+  }, [])
+
   const [view, setView] = useState<'global' | 'dms'>('global')
   const [globalRoomId, setGlobalRoomId] = useState<string | null>(null)
   const [myRooms, setMyRooms] = useState<RoomWithPreview[]>([])
@@ -133,13 +163,22 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${currentRoomId}` },
         async (payload) => {
+          const incomingId = (payload.new as Message).id
+
           // Fetch the author profile for display (realtime payload only has author_id)
           const { data: author } = await supabase
             .from('profiles')
             .select('*')
             .eq('id', payload.new.author_id)
             .maybeSingle()
-          setMessages((prev) => [...prev, { ...(payload.new as Message), author: author ?? undefined }])
+
+          // Skip if we already have this exact message — e.g. it was just
+          // added optimistically by sendMessage and already replaced with
+          // the real row, so this realtime echo would otherwise render it twice.
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === incomingId)) return prev
+            return [...prev, { ...(payload.new as Message), author: author ?? undefined }]
+          })
         }
       )
       .on(
@@ -168,9 +207,20 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
     presenceChannel
       .on('presence', { event: 'sync' }, () => {
         const state = presenceChannel.presenceState()
-        const members = Object.values(state)
-          .flat()
-          .map((p: any) => p.profile as Profile)
+        const allEntries = Object.values(state).flat() as any[]
+        // Dedupe by user id: the same account open in two tabs/devices tracks
+        // two separate presence entries under the same key, which previously
+        // showed that person twice in the online list (and showed "you"
+        // twice if you had the app open on more than one device).
+        const seen = new Set<string>()
+        const members: Profile[] = []
+        for (const entry of allEntries) {
+          const p = entry.profile as Profile
+          if (p && !seen.has(p.id)) {
+            seen.add(p.id)
+            members.push(p)
+          }
+        }
         setOnlineMembers(members)
       })
       .subscribe(async (status) => {
@@ -237,16 +287,42 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
 
     setComposerText('')
 
-    const { error } = await supabase.from('messages').insert({
+    // Optimistic update: show the message immediately instead of waiting on
+    // the realtime echo, which can be delayed, drop, or arrive after a room
+    // switch — that gap was the cause of "I sent a message but it shows no
+    // messages." We use a temporary client-side id so we can later match
+    // and replace it with the real row from the server (or from realtime)
+    // without rendering it twice.
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const optimisticMessage: Message = {
+      id: tempId,
       room_id: currentRoomId,
       author_id: profile.id,
       text,
-    })
+      media_url: null,
+      media_type: null,
+      created_at: new Date().toISOString(),
+      author: profile,
+    }
+    setMessages((prev) => [...prev, optimisticMessage])
+
+    const { data: inserted, error } = await supabase
+      .from('messages')
+      .insert({ room_id: currentRoomId, author_id: profile.id, text })
+      .select('*, author:profiles(*)')
+      .single()
+
     if (error) {
       showToast('⚠️ Message failed to send — check your connection')
+      // Roll back the optimistic message so the UI doesn't lie about what sent.
+      setMessages((prev) => prev.filter((m) => m.id !== tempId))
+      return
     }
-    // No optimistic local push needed — the realtime INSERT subscription above
-    // will deliver it back to us (and everyone else) within a moment.
+
+    // Replace the temp message with the real saved row (real id, exact
+    // server timestamp). If the realtime INSERT event for this same row
+    // also arrives, the INSERT handler below skips it (already present by id).
+    setMessages((prev) => prev.map((m) => (m.id === tempId ? (inserted as any) : m)))
   }
 
   async function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
@@ -269,16 +345,36 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
     }
     const { data: urlData } = supabase.storage.from('chat-media').getPublicUrl(path)
 
-    const { error: insertError } = await supabase.from('messages').insert({
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const optimisticMessage: Message = {
+      id: tempId,
       room_id: currentRoomId,
       author_id: profile.id,
+      text: null,
       media_url: urlData.publicUrl,
       media_type: isVideo ? 'video' : 'image',
-    })
+      created_at: new Date().toISOString(),
+      author: profile,
+    }
+    setMessages((prev) => [...prev, optimisticMessage])
+
+    const { data: inserted, error: insertError } = await supabase
+      .from('messages')
+      .insert({
+        room_id: currentRoomId,
+        author_id: profile.id,
+        media_url: urlData.publicUrl,
+        media_type: isVideo ? 'video' : 'image',
+      })
+      .select('*, author:profiles(*)')
+      .single()
+
     if (insertError) {
       showToast('⚠️ Could not post media: ' + insertError.message)
+      setMessages((prev) => prev.filter((m) => m.id !== tempId))
     } else {
       showToast('✅ Sent!')
+      setMessages((prev) => prev.map((m) => (m.id === tempId ? (inserted as any) : m)))
     }
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
