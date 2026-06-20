@@ -142,6 +142,16 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
           setMessages((prev) => [...prev, { ...(payload.new as Message), author: author ?? undefined }])
         }
       )
+      .on(
+        // Messages auto-delete after 5 minutes (server-side cron job). Without
+        // this, a message removed on the server would keep showing on screen
+        // for anyone already viewing the room until they refreshed.
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'messages', filter: `room_id=eq.${currentRoomId}` },
+        (payload) => {
+          setMessages((prev) => prev.filter((m) => m.id !== payload.old.id))
+        }
+      )
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
