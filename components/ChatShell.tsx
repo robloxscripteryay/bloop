@@ -36,7 +36,6 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
   const [dmSearch, setDmSearch] = useState('')
   const [searchResults, setSearchResults] = useState<Profile[]>([])
 
-  const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // ---------- Load the Global room id, then its messages ----------
@@ -177,8 +176,17 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
   }, [globalRoomId, isGuest, profile, supabase])
 
   // ---------- Auto-scroll to newest message ----------
+  // Scoped to the messages container itself (messagesContainerRef), not
+  // scrollIntoView, which walks up the DOM to find "the nearest scrollable
+  // ancestor" and can end up scrolling the whole page if any ancestor's
+  // height isn't perfectly constrained — which is what caused the page to
+  // jump on send instead of just scrolling the message list.
+  const messagesContainerRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const container = messagesContainerRef.current
+    if (container) {
+      container.scrollTop = container.scrollHeight
+    }
   }, [messages])
 
   // ---------- Actions ----------
@@ -482,7 +490,7 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
                   <>
                     <div className="section-label">Results</div>
                     {searchResults.map((u) => (
-                      <button key={u.id} className="chat-item" onClick={() => startDm(u)}>
+                      <button key={u.id} className="chat-item" onClick={() => (isGuest ? promptSignup() : startDm(u))}>
                         <div className="avatar" style={{ background: u.avatar_color }}>
                           {u.username.slice(0, 2).toUpperCase()}
                           <span className={`status-dot ${u.status}`} />
@@ -551,7 +559,7 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
           </div>
         </div>
 
-        <div className="messages">
+        <div className="messages" ref={messagesContainerRef}>
           {messagesLoading ? (
             <div className="messages-empty"><span className="spinner" style={{ borderTopColor: 'var(--accent)', borderColor: 'var(--border)' }} /></div>
           ) : !currentRoom ? (
@@ -597,7 +605,6 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
                   </div>
                 )
               })}
-              <div ref={messagesEndRef} />
             </>
           )}
         </div>
