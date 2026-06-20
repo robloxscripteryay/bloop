@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase-client'
 import type { Profile, Room, Message } from '@/lib/types'
 import RoomModal from './RoomModal'
-import CallModal from './CallModal'
 import Toast, { useToast } from './Toast'
 
 type RoomWithPreview = Room & { lastMessage?: string; otherUser?: Profile; status?: string }
@@ -30,8 +29,6 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [themePopoverOpen, setThemePopoverOpen] = useState(false)
   const [roomModalOpen, setRoomModalOpen] = useState(false)
-  const [callOpen, setCallOpen] = useState(false)
-  const [callKind, setCallKind] = useState<'voice' | 'video'>('voice')
   const [memberSearch, setMemberSearch] = useState('')
   const [dmSearch, setDmSearch] = useState('')
   const [searchResults, setSearchResults] = useState<Profile[]>([])
@@ -553,10 +550,6 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
               </div>
             </div>
           </div>
-          <div className="header-actions">
-            <button className="icon-btn" title="Voice call" onClick={() => { setCallKind('voice'); setCallOpen(true) }} disabled={!currentRoom}>📞</button>
-            <button className="icon-btn" title="Video call" onClick={() => { setCallKind('video'); setCallOpen(true) }} disabled={!currentRoom}>🎥</button>
-          </div>
         </div>
 
         <div className="messages" ref={messagesContainerRef}>
@@ -659,10 +652,6 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
             return data ?? []
           }}
         />
-      )}
-
-      {callOpen && currentRoom && (
-        <CallModal room={currentRoom} kind={callKind} onClose={() => setCallOpen(false)} />
       )}
 
       <Toast message={toast} />
