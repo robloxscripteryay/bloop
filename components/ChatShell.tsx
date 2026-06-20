@@ -525,7 +525,31 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
       <div className="sidebar">
         <div className="sidebar-header">
           <h2>{view === 'global' ? 'Global Chat' : 'Messages'}</h2>
-          <button className="icon-btn menu-toggle" onClick={() => setSidebarOpen(false)}>✕</button>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', position: 'relative' }}>
+            <button
+              className="icon-btn mobile-account-btn"
+              onClick={() => (isGuest ? promptSignup() : setThemePopoverOpen((v) => !v))}
+              title="Account settings"
+            >
+              {isGuest ? 'G' : (profile?.username?.slice(0, 2).toUpperCase() ?? '··')}
+            </button>
+            {themePopoverOpen && !isGuest && (
+              <div className="theme-popover theme-popover-mobile show">
+                <h4>Chat theme</h4>
+                <div className="theme-grid">
+                  {(['coral', 'teal', 'violet', 'amber'] as const).map((t) => (
+                    <div
+                      key={t}
+                      className={`theme-swatch sw-${t} ${profile?.theme === t ? 'selected' : ''}`}
+                      onClick={() => setTheme(t)}
+                    />
+                  ))}
+                </div>
+                <button className="signout-btn" onClick={signOut}>Sign out</button>
+              </div>
+            )}
+            <button className="icon-btn menu-toggle" onClick={() => setSidebarOpen(false)}>✕</button>
+          </div>
         </div>
 
         {view === 'global' ? (
