@@ -72,6 +72,7 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [themePopoverOpen, setThemePopoverOpen] = useState(false)
   const [roomModalOpen, setRoomModalOpen] = useState(false)
+  const [groupMenuOpen, setGroupMenuOpen] = useState(false)
   const [memberSearch, setMemberSearch] = useState('')
   const [dmSearch, setDmSearch] = useState('')
   const [searchResults, setSearchResults] = useState<Profile[]>([])
@@ -472,6 +473,51 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
     openRoom(newRoom.id, newRoom)
   }
 
+  // Only the creator can fully delete a group (removes it for everyone).
+  // Enforced both here (UI) and in the database (RLS policy), so this can't
+  // be bypassed even by calling the API directly.
+  async function deleteGroup(room: RoomWithPreview) {
+    if (!profile || room.created_by !== profile.id) return
+    const confirmed = window.confirm(`Delete "${room.name}" for everyone? This can't be undone.`)
+    if (!confirmed) return
+
+    const { error } = await supabase.from('rooms').delete().eq('id', room.id)
+    if (error) {
+      showToast('⚠️ Could not delete group')
+      return
+    }
+    showToast(`🗑️ Deleted "${room.name}"`)
+    setMyRooms((prev) => prev.filter((r) => r.id !== room.id))
+    if (currentRoomId === room.id && globalRoomId) {
+      openRoom(globalRoomId, { id: globalRoomId, type: 'global', name: 'Global Chat', icon: '🌐', created_by: null, created_at: '' })
+      setView('global')
+    }
+  }
+
+  // Anyone (including the creator) can leave a group — this only removes
+  // their own membership, not the group itself, for non-creators.
+  async function leaveGroup(room: RoomWithPreview) {
+    if (!profile) return
+    const confirmed = window.confirm(`Leave "${room.name}"? You'll need to be re-invited to rejoin.`)
+    if (!confirmed) return
+
+    const { error } = await supabase
+      .from('room_members')
+      .delete()
+      .eq('room_id', room.id)
+      .eq('user_id', profile.id)
+    if (error) {
+      showToast('⚠️ Could not leave group')
+      return
+    }
+    showToast(`👋 Left "${room.name}"`)
+    setMyRooms((prev) => prev.filter((r) => r.id !== room.id))
+    if (currentRoomId === room.id && globalRoomId) {
+      openRoom(globalRoomId, { id: globalRoomId, type: 'global', name: 'Global Chat', icon: '🌐', created_by: null, created_at: '' })
+      setView('global')
+    }
+  }
+
   async function setTheme(theme: string) {
     if (!profile) return
     document.body.setAttribute('data-theme', theme)
@@ -693,6 +739,32 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
               </div>
             </div>
           </div>
+          {currentRoom?.type === 'group' && (
+            <div style={{ position: 'relative' }}>
+              <button className="icon-btn" title="Group options" onClick={() => setGroupMenuOpen((v) => !v)}>⋮</button>
+              {groupMenuOpen && (
+                <div className="theme-popover show" style={{ left: 'auto', right: 0, bottom: 'auto', top: 'calc(100% + 8px)', width: 180 }}>
+                  {currentRoom.created_by === profile.id ? (
+                    <button
+                      className="signout-btn"
+                      style={{ marginTop: 0 }}
+                      onClick={() => { setGroupMenuOpen(false); deleteGroup(currentRoom) }}
+                    >
+                      Delete group
+                    </button>
+                  ) : (
+                    <button
+                      className="signout-btn"
+                      style={{ marginTop: 0 }}
+                      onClick={() => { setGroupMenuOpen(false); leaveGroup(currentRoom) }}
+                    >
+                      Leave group
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="messages" ref={messagesContainerRef}>
