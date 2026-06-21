@@ -59,6 +59,23 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
     }
   }, [])
 
+  // ---------- Safety net: force mobile layout via JS, independent of CSS @media ----------
+  // This duplicates what @media (max-width:860px) should already do in
+  // globals.css, but as a direct, unconditional override based on actual
+  // measured window width. If the CSS media query ever fails to apply for
+  // any reason, this still guarantees the sidebar collapses and the main
+  // content area gets the full window width instead of being squeezed into
+  // a sliver by the 76px+260px fixed-width grid columns.
+  const [isMobileWidth, setIsMobileWidth] = useState(false)
+  useEffect(() => {
+    function checkWidth() {
+      setIsMobileWidth(window.innerWidth <= 860)
+    }
+    checkWidth()
+    window.addEventListener('resize', checkWidth)
+    return () => window.removeEventListener('resize', checkWidth)
+  }, [])
+
   const [view, setView] = useState<'global' | 'dms'>('global')
   const [globalRoomId, setGlobalRoomId] = useState<string | null>(null)
   const [myRooms, setMyRooms] = useState<RoomWithPreview[]>([])
@@ -538,11 +555,15 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
 
   // ---------- Render ----------
   return (
-    <div className={`app-shell ${sidebarOpen ? 'sidebar-open' : ''}`} data-theme={profile?.theme ?? 'coral'}>
+    <div
+      className={`app-shell ${sidebarOpen ? 'sidebar-open' : ''}`}
+      data-theme={profile?.theme ?? 'coral'}
+      style={isMobileWidth ? { gridTemplateColumns: '0 0 minmax(0, 1fr)' } : undefined}
+    >
       <div className="mobile-overlay" onClick={() => setSidebarOpen(false)} />
 
       {/* RAIL */}
-      <div className="rail">
+      <div className="rail" style={isMobileWidth ? { display: 'none' } : undefined}>
         <div className="rail-logo">B</div>
         <div
           className={`rail-item ${view === 'global' ? 'active' : ''}`}
