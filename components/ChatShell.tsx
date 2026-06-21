@@ -560,7 +560,11 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
       data-theme={profile?.theme ?? 'coral'}
       style={isMobileWidth ? { gridTemplateColumns: '0 0 minmax(0, 1fr)' } : undefined}
     >
-      <div className="mobile-overlay" onClick={() => setSidebarOpen(false)} />
+      <div
+        className="mobile-overlay"
+        onClick={() => setSidebarOpen(false)}
+        style={isMobileWidth ? { display: sidebarOpen ? 'block' : 'none', position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 55 } : undefined}
+      />
 
       {/* RAIL */}
       <div className="rail" style={isMobileWidth ? { display: 'none' } : undefined}>
@@ -602,19 +606,47 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
       </div>
 
       {/* SIDEBAR */}
-      <div className="sidebar">
+      <div
+        className="sidebar"
+        style={
+          isMobileWidth
+            ? {
+                position: 'fixed',
+                left: 0,
+                top: 0,
+                bottom: 0,
+                width: '260px',
+                zIndex: 60,
+                transform: sidebarOpen ? 'translateX(0)' : 'translateX(-100%)',
+                transition: 'transform .35s cubic-bezier(.22,1,.36,1)',
+                boxShadow: '0 0 40px rgba(0,0,0,.5)',
+              }
+            : undefined
+        }
+      >
         <div className="sidebar-header">
           <h2>{view === 'global' ? 'Global Chat' : 'Messages'}</h2>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', position: 'relative' }}>
             <button
               className="icon-btn mobile-account-btn"
+              style={isMobileWidth ? { display: 'flex' } : undefined}
               onClick={() => (isGuest ? promptSignup() : setThemePopoverOpen((v) => !v))}
               title="Account settings"
             >
               {isGuest ? 'G' : (profile?.username?.slice(0, 2).toUpperCase() ?? '··')}
             </button>
             {themePopoverOpen && !isGuest && (
-              <div className="theme-popover theme-popover-mobile show">
+              <div
+                className="theme-popover show"
+                style={{
+                  position: 'fixed',
+                  top: '60px',
+                  right: '14px',
+                  left: 'auto',
+                  bottom: 'auto',
+                  zIndex: 999,
+                }}
+              >
                 <h4>Chat theme</h4>
                 <div className="theme-grid">
                   {(['coral', 'teal', 'violet', 'amber'] as const).map((t) => (
@@ -628,7 +660,7 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
                 <button className="signout-btn" onClick={signOut}>Sign out</button>
               </div>
             )}
-            <button className="icon-btn menu-toggle" onClick={() => setSidebarOpen(false)}>✕</button>
+            <button className="icon-btn menu-toggle" style={isMobileWidth ? { display: 'flex' } : undefined} onClick={() => setSidebarOpen(false)}>✕</button>
           </div>
         </div>
 
@@ -749,7 +781,7 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
       <div className="main">
         <div className="chat-header">
           <div className="chat-header-left">
-            <button className="icon-btn menu-toggle" onClick={() => setSidebarOpen(true)}>☰</button>
+            <button className="icon-btn menu-toggle" style={isMobileWidth ? { display: 'flex' } : undefined} onClick={() => setSidebarOpen(true)}>☰</button>
             <div className="avatar room" style={{ width: 34, height: 34, fontSize: 13 }}>
               {currentRoom?.icon ?? '💬'}
             </div>
