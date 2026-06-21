@@ -314,7 +314,6 @@ input,textarea{font-family:inherit; color:inherit;}
 .main{
   height:100vh; height:100dvh; height:var(--app-height, 100dvh); min-height:0;
   display:flex; flex-direction:column; background:var(--ink); min-width:0;
-  background-image:radial-gradient(circle at 100% 0%, var(--accent-dim), transparent 35%);
 }
 .chat-header{
   height:64px; border-bottom:1px solid var(--border); flex-shrink:0;
