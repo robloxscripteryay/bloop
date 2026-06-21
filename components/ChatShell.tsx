@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase-client'
 import type { Profile, Room, Message } from '@/lib/types'
 import RoomModal from './RoomModal'
+import MobileChatShell from './MobileChatShell'
 import Toast, { useToast } from './Toast'
 
 type RoomWithPreview = Room & { lastMessage?: string; otherUser?: Profile; status?: string }
@@ -67,9 +68,17 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
   // content area gets the full window width instead of being squeezed into
   // a sliver by the 76px+260px fixed-width grid columns.
   const [isMobileWidth, setIsMobileWidth] = useState(false)
+  // Separate, narrower threshold specifically for phones. Tablet (between
+  // this and 860px) keeps the existing grid-based collapsible-sidebar
+  // layout, since that's been confirmed working in landscape. True phone
+  // widths get an entirely separate, simpler single-pane component instead
+  // of trying to keep patching the grid layout for them.
+  const [isPhoneWidth, setIsPhoneWidth] = useState(false)
+  const [showingChat, setShowingChat] = useState(false)
   useEffect(() => {
     function checkWidth() {
       setIsMobileWidth(window.innerWidth <= 860)
+      setIsPhoneWidth(window.innerWidth <= 600)
     }
     checkWidth()
     window.addEventListener('resize', checkWidth)
@@ -135,8 +144,26 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
       .filter((r: Room | null) => r && r.type !== 'global') as Room[]
 
     // For DMs, resolve the other person's profile for display name/avatar.
+    // Also fetch each room's most recent message for the sidebar preview text
+    // — this was previously never populated, so the preview always showed
+    // "No messages yet" even when real messages existed.
     const withPreviews: RoomWithPreview[] = await Promise.all(
       rooms.map(async (r) => {
+        const { data: recentMsgs } = await supabase
+          .from('messages')
+          .select('text, media_type')
+          .eq('room_id', r.id)
+          .order('created_at', { ascending: false })
+          .limit(1)
+        const latest = recentMsgs?.[0]
+        const preview = latest
+          ? latest.text
+            ? latest.text
+            : latest.media_type === 'video'
+              ? '📹 Sent a video'
+              : '📷 Sent a photo'
+          : undefined
+
         if (r.type === 'dm') {
           const { data: members } = await supabase
             .from('room_members')
@@ -145,9 +172,9 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
             .neq('user_id', profile.id)
             .limit(1)
           const other = (members?.[0] as any)?.profiles as Profile | undefined
-          return { ...r, otherUser: other, name: other?.username ?? 'Unknown user', status: other?.status }
+          return { ...r, otherUser: other, name: other?.username ?? 'Unknown user', status: other?.status, lastMessage: preview }
         }
-        return r
+        return { ...r, lastMessage: preview }
       })
     )
 
@@ -195,12 +222,13 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
         { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${currentRoomId}` },
         async (payload) => {
           const incomingId = (payload.new as Message).id
+          const newMsg = payload.new as Message
 
           // Fetch the author profile for display (realtime payload only has author_id)
           const { data: author } = await supabase
             .from('profiles')
             .select('*')
-            .eq('id', payload.new.author_id)
+            .eq('id', newMsg.author_id)
             .maybeSingle()
 
           // Skip if we already have this exact message — e.g. it was just
@@ -208,8 +236,21 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
           // the real row, so this realtime echo would otherwise render it twice.
           setMessages((prev) => {
             if (prev.some((m) => m.id === incomingId)) return prev
-            return [...prev, { ...(payload.new as Message), author: author ?? undefined }]
+            return [...prev, { ...newMsg, author: author ?? undefined }]
           })
+
+          // Keep the sidebar's preview text in sync with the latest message,
+          // instead of it staying frozen at whatever loaded on initial mount.
+          const previewText = newMsg.text
+            ? newMsg.text
+            : newMsg.media_type === 'video'
+              ? '📹 Sent a video'
+              : newMsg.media_type === 'image'
+                ? '📷 Sent a photo'
+                : undefined
+          if (previewText) {
+            setMyRooms((prev) => prev.map((r) => (r.id === newMsg.room_id ? { ...r, lastMessage: previewText } : r)))
+          }
         }
       )
       .on(
@@ -535,6 +576,25 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
     }
   }
 
+  // "Delete logs for me" — immediately deletes every message the current
+  // user has ever sent (anywhere: Global, DMs, groups), instead of waiting
+  // for the 5-minute automatic cleanup. Doesn't touch other people's
+  // messages, even in the same conversation.
+  async function deleteAllMyLogs() {
+    if (!profile || isGuest) return
+    const confirmed = window.confirm('Delete every message you\'ve sent, everywhere? This can\'t be undone.')
+    if (!confirmed) return
+
+    const { error } = await supabase.from('messages').delete().eq('author_id', profile.id)
+    if (error) {
+      showToast('⚠️ Could not delete your messages')
+      return
+    }
+    showToast('🗑️ Your messages have been deleted')
+    // Reflect the deletion immediately in whatever's currently open.
+    setMessages((prev) => prev.filter((m) => m.author_id !== profile.id))
+  }
+
   async function setTheme(theme: string) {
     if (!profile) return
     document.body.setAttribute('data-theme', theme)
@@ -554,6 +614,62 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
   }
 
   // ---------- Render ----------
+  if (isPhoneWidth) {
+    return (
+      <div data-theme={profile?.theme ?? 'coral'}>
+        <MobileChatShell
+          isGuest={isGuest}
+          profile={profile}
+          view={view}
+          setRailView={setRailView}
+          promptSignup={promptSignup}
+          currentRoom={currentRoom}
+          currentRoomId={currentRoomId}
+          showingChat={showingChat}
+          setShowingChat={setShowingChat}
+          onlineMembers={onlineMembers}
+          memberSearch={memberSearch}
+          setMemberSearch={setMemberSearch}
+          startDm={startDm}
+          dmSearch={dmSearch}
+          searchUsers={searchUsers}
+          searchResults={searchResults}
+          myRooms={myRooms}
+          openRoom={openRoom}
+          setRoomModalOpen={setRoomModalOpen}
+          messages={messages}
+          messagesLoading={messagesLoading}
+          composerText={composerText}
+          setComposerText={setComposerText}
+          sendMessage={sendMessage}
+          fileInputRef={fileInputRef}
+          handleFileSelected={handleFileSelected}
+          themePopoverOpen={themePopoverOpen}
+          setThemePopoverOpen={setThemePopoverOpen}
+          setTheme={setTheme}
+          signOut={signOut}
+          groupMenuOpen={groupMenuOpen}
+          setGroupMenuOpen={setGroupMenuOpen}
+          deleteGroup={deleteGroup}
+          leaveGroup={leaveGroup}
+          deleteAllMyLogs={deleteAllMyLogs}
+        />
+        {roomModalOpen && (
+          <RoomModal
+            onClose={() => setRoomModalOpen(false)}
+            onCreate={createRoom}
+            searchUsers={async (q: string) => {
+              if (!profile) return []
+              const { data } = await supabase.from('profiles').select('*').ilike('username', `%${q}%`).neq('id', profile.id).limit(8)
+              return data ?? []
+            }}
+          />
+        )}
+        <Toast message={toast} />
+      </div>
+    )
+  }
+
   return (
     <div
       className={`app-shell ${sidebarOpen ? 'sidebar-open' : ''}`}
@@ -587,21 +703,6 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
           <div className="rail-avatar" onClick={() => (isGuest ? promptSignup() : setThemePopoverOpen((v) => !v))} title="Account settings">
             {isGuest ? 'G' : (profile?.username?.slice(0, 2).toUpperCase() ?? '··')}
           </div>
-          {themePopoverOpen && !isGuest && (
-            <div className="theme-popover show">
-              <h4>Chat theme</h4>
-              <div className="theme-grid">
-                {(['coral', 'teal', 'violet', 'amber'] as const).map((t) => (
-                  <div
-                    key={t}
-                    className={`theme-swatch sw-${t} ${profile?.theme === t ? 'selected' : ''}`}
-                    onClick={() => setTheme(t)}
-                  />
-                ))}
-              </div>
-              <button className="signout-btn" onClick={signOut}>Sign out</button>
-            </div>
-          )}
         </div>
       </div>
 
