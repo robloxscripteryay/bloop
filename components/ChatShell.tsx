@@ -22,27 +22,40 @@ export default function ChatShell({ initialProfile, isGuest }: { initialProfile:
   // layout is sized with vh/dvh (the layout viewport), the browser scrolls
   // the page to keep the focused input visible above the keyboard, which
   // drags the whole app shell upward instead of just resizing the chat.
-  // Fix: track the real visible height via window.visualViewport (which DOES
-  // account for the keyboard) and pin the app shell to that exact pixel
-  // height via a CSS variable, instead of trusting vh/dvh during keyboard use.
+  //
+  // IMPORTANT: window.visualViewport.height is known to be unreliable on
+  // first read on iOS (it can report an incorrect, too-small value before
+  // the page has fully settled — see WICG/visual-viewport#78). Blindly
+  // applying it on mount previously shrank the entire app to a sliver.
+  // To stay safe, we only ever apply it as an override once we've observed
+  // at least one resize/scroll event AFTER mount (a real signal something
+  // changed, e.g. keyboard opening), and we never let it shrink the app
+  // below a sane floor (480px) so a bad reading can't blank the screen.
   useEffect(() => {
     const vv = typeof window !== 'undefined' ? window.visualViewport : null
-    if (!vv) return // older browsers: CSS dvh fallback in globals.css still applies
+    if (!vv) return // unsupported browsers: CSS dvh fallback in globals.css still applies
 
-    function setAppHeight() {
-      document.documentElement.style.setProperty('--app-height', `${vv!.height}px`)
-      // Keep the page itself pinned to the top-left of the visual viewport;
-      // without this, iOS can leave the layout scrolled after the keyboard
-      // opens, which is the "page goes upward" symptom.
+    let hasSeenRealResize = false
+
+    function applyViewportHeight() {
+      if (!hasSeenRealResize) return // ignore the unreliable first/initial reading
+      const h = vv!.height
+      if (!h || h < 480) return // implausible reading — never let this blank the app
+      document.documentElement.style.setProperty('--app-height', `${h}px`)
       window.scrollTo(0, 0)
     }
 
-    setAppHeight()
-    vv.addEventListener('resize', setAppHeight)
-    vv.addEventListener('scroll', setAppHeight)
+    function onResize() {
+      hasSeenRealResize = true
+      applyViewportHeight()
+    }
+
+    vv.addEventListener('resize', onResize)
+    vv.addEventListener('scroll', onResize)
     return () => {
-      vv.removeEventListener('resize', setAppHeight)
-      vv.removeEventListener('scroll', setAppHeight)
+      vv.removeEventListener('resize', onResize)
+      vv.removeEventListener('scroll', onResize)
+      document.documentElement.style.removeProperty('--app-height')
     }
   }, [])
 
